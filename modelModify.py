@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict, Optional, Tuple
 
 import ollama
+from ollama import chat
 
 
 # --------------------------------------------------
@@ -26,18 +27,24 @@ def try_parse_json(text: str) -> Tuple[Optional[Any], Optional[str]]:
         return None, e
 
 def find_json(text: str) -> str:
-    try:
-        start = text.find("```json")
-        if start == -1:
-            raise ValueError("No ```json block found")
-
-        start = text.find("\n", start) + 1  # move past ```json line
-        end = text.rfind("```")
-
-        json_str = text[start:end].strip()
-        return json_str
-    except:
+    for marker in ("```json", "```"):
+        start = text.find(marker)
+        if start != -1:
+            break
+    else:
         return text
+
+    start = text.find("\n", start)
+    if start == -1:
+        return text
+
+    start += 1
+
+    end = text.find("```", start)
+    if end == -1:
+        return text
+
+    return text[start:end].strip()
     
 # --------------------------------------------------
 # Dataset Saving
@@ -70,9 +77,12 @@ def generate_json(task_prompt: str) -> str:
     Generate JSON using DeepSeek-R1 1.5B.
     """
 
-    response = client.generate(
+    response = chat(
         model="deepseek-r1:1.5b",
-        prompt=f"""
+        messages=[
+            {
+                "role": "user",
+                "content": f"""
 You are a JSON generator.
 
 Return ONLY JSON.
@@ -84,9 +94,11 @@ Return ONLY JSON.
 Task:
 {task_prompt}
 """
+            }
+        ]
     )
 
-    return extract_text(response)
+    return response.message.content
 
 
 # --------------------------------------------------
@@ -102,9 +114,12 @@ def repair_json(
     Ask DeepSeek-R1 8B to repair invalid JSON.
     """
 
-    response = client.generate(
-        model="deepseek-r1:8b",
-        prompt=f"""
+    response = chat(
+        model="deepseek-r1:1.5b",
+        messages=[
+            {
+                "role": "user",
+                "content": f"""
 You are a JSON repair system.
 
 Original task:
@@ -125,9 +140,11 @@ Requirements:
 - Fix syntax only.
 - Return ONLY valid JSON.
 """
+            }
+        ]
     )
 
-    return extract_text(response)
+    return response.message.content
 
 
 # --------------------------------------------------
@@ -137,7 +154,7 @@ Requirements:
 def repair_until_valid(
     broken_json: str,
     original_task: str,
-    max_attempts: int = 5
+    max_attempts: int = 10
 ):
     """
     Attempts repeated repairs using the 8B model.
@@ -157,13 +174,14 @@ def repair_until_valid(
 
         current_json = find_json(current_json)
 
+
         parsed, error = try_parse_json(current_json)
 
         print(
             f"Repair attempt {attempt}/{max_attempts} "
             f"error: {error}"
         )
-
+        print("current broken json: " + current_json)
         # Success
         if parsed is not None:
             print(f"Repair succeeded on attempt {attempt - 1}")
@@ -197,7 +215,7 @@ def repair_until_valid(
 def generate_valid_json(
     task_prompt: str,
     dataset_path: str = "json_repair_dataset.jsonl",
-    max_repair_attempts: int = 5
+    max_repair_attempts: int = 10
 ):
     """
     Pipeline:
@@ -301,7 +319,7 @@ def create_valid_json(task: str):
 
     result = generate_valid_json(
         task_prompt=task,
-        max_repair_attempts=5
+        max_repair_attempts=10
     )
 
     print("\n========================")
